@@ -13,6 +13,7 @@
 - 后台常驻、开机自启、崩溃自动拉起
 - 长任务最长等待 10 分钟
 - 长任务执行中会间歇发送“还在处理中”提示
+- 自动安装 `wexia-installer` skill 到 `~/.codex/skills` 和 `~/.claude/skills`
 
 ### 直接安装
 

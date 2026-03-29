@@ -1,0 +1,4 @@
+interface:
+  display_name: "Wexia Installer"
+  short_description: "Install or repair the Wexia WeChat bridge"
+  default_prompt: "Use $wexia-installer to install, upgrade, or troubleshoot the Wexia WeChat bridge on macOS."

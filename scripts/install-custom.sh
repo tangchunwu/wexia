@@ -16,6 +16,7 @@ LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
 LAUNCH_LABEL="com.openclaw.weixin-acp"
 PLIST_PATH="$LAUNCH_AGENTS_DIR/$LAUNCH_LABEL.plist"
 RUN_SCRIPT_PATH="$REPO_DIR/scripts/run-weixin-acp.sh"
+SKILL_SRC_REL="skills/wexia-installer"
 
 mkdir -p "$INSTALL_BASE" "$LOG_DIR" "$LAUNCH_AGENTS_DIR"
 
@@ -65,6 +66,13 @@ pnpm --filter weixin-agent-sdk run build
 
 echo "🏗️ 构建 packages/weixin-acp"
 pnpm --filter weixin-acp run build
+
+echo "🧠 安装 skill 到 Codex / Claude"
+for SKILL_ROOT in "$HOME/.codex/skills" "$HOME/.claude/skills"; do
+  mkdir -p "$SKILL_ROOT"
+  rm -rf "$SKILL_ROOT/wexia-installer"
+  cp -R "$REPO_DIR/$SKILL_SRC_REL" "$SKILL_ROOT/wexia-installer"
+done
 
 echo "🧾 写入 LaunchAgent: $PLIST_PATH"
 cat > "$PLIST_PATH" <<EOF
@@ -123,6 +131,8 @@ echo "📁 安装目录: $REPO_DIR"
 echo "🧩 LaunchAgent: $PLIST_PATH"
 echo "📜 标准输出日志: $LOG_DIR/weixin-acp.stdout.log"
 echo "📜 错误日志: $LOG_DIR/weixin-acp.stderr.log"
+echo "🧠 Codex Skill: $HOME/.codex/skills/wexia-installer"
+echo "🧠 Claude Skill: $HOME/.claude/skills/wexia-installer"
 echo
 echo "下一步："
 echo "1. 首次登录微信："
