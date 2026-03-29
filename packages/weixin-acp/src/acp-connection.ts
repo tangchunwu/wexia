@@ -7,7 +7,7 @@ import {
   ndJsonStream,
   PROTOCOL_VERSION,
 } from "@agentclientprotocol/sdk";
-import type { SessionId } from "@agentclientprotocol/sdk";
+import type { SessionId, SessionNotification } from "@agentclientprotocol/sdk";
 
 import type { AcpAgentOptions } from "./types.js";
 import { ResponseCollector } from "./response-collector.js";
@@ -32,6 +32,7 @@ export class AcpConnection {
   private connection: ClientSideConnection | null = null;
   private ready = false;
   private collectors = new Map<SessionId, ResponseCollector>();
+  private progressListeners = new Map<SessionId, (notification: SessionNotification) => void>();
 
   private onExit?: () => void;
 
@@ -45,6 +46,17 @@ export class AcpConnection {
 
   unregisterCollector(sessionId: SessionId): void {
     this.collectors.delete(sessionId);
+  }
+
+  registerProgressListener(
+    sessionId: SessionId,
+    listener: (notification: SessionNotification) => void,
+  ): void {
+    this.progressListeners.set(sessionId, listener);
+  }
+
+  unregisterProgressListener(sessionId: SessionId): void {
+    this.progressListeners.delete(sessionId);
   }
 
   /**
@@ -95,6 +107,10 @@ export class AcpConnection {
             }
             break;
         }
+        const progressListener = this.progressListeners.get(params.sessionId);
+        if (progressListener) {
+          progressListener(params);
+        }
         const collector = this.collectors.get(params.sessionId);
         if (collector) {
           collector.handleUpdate(params);
@@ -133,6 +149,7 @@ export class AcpConnection {
   dispose(): void {
     this.ready = false;
     this.collectors.clear();
+    this.progressListeners.clear();
     if (this.process) {
       this.process.kill();
       this.process = null;

@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import type { Agent, ChatRequest } from "../agent/interface.js";
+import type { Agent, ChatProgressUpdate, ChatRequest } from "../agent/interface.js";
 import { sendTyping } from "../api/api.js";
 import type { WeixinMessage, MessageItem } from "../api/types.js";
 import { MessageItemType, TypingStatus } from "../api/types.js";
@@ -18,6 +18,25 @@ import { markdownToPlainText, sendMessageWeixin } from "./send.js";
 import { handleSlashCommand } from "./slash-commands.js";
 
 const MEDIA_TEMP_DIR = "/tmp/weixin-agent/media";
+const PROGRESS_FIRST_DELAY_MS = 30_000;
+const PROGRESS_MIN_INTERVAL_MS = 45_000;
+const PROGRESS_TIMER_TICK_MS = 15_000;
+
+function formatElapsedMs(elapsedMs: number): string {
+  const totalSeconds = Math.max(1, Math.floor(elapsedMs / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes <= 0) return `${seconds} 秒`;
+  return `${minutes} 分 ${seconds} 秒`;
+}
+
+function buildProgressNotice(elapsedMs: number, detail?: string): string {
+  const elapsed = formatElapsedMs(elapsedMs);
+  if (detail) {
+    return `⏳ 还在处理中，已运行 ${elapsed}\n当前进度：${detail}`;
+  }
+  return `⏳ 还在处理中，已运行 ${elapsed}`;
+}
 
 /** Save a buffer to a temporary file, returning the file path. */
 async function saveMediaBuffer(
@@ -107,6 +126,7 @@ export async function processOneMessage(
 ): Promise<void> {
   const receivedAt = Date.now();
   const textBody = extractTextBody(full.item_list);
+  let effectiveTextBody = textBody;
 
   // --- Slash commands ---
   if (textBody.startsWith("/")) {
@@ -122,11 +142,15 @@ export async function processOneMessage(
         log: deps.log,
         errLog: deps.errLog,
         onClear: () => deps.agent.clearSession?.(conversationId),
+        onSelectAgent: (agentKey) => deps.agent.selectAgent?.(conversationId, agentKey),
+        getCurrentAgent: () => deps.agent.getCurrentAgent?.(conversationId),
+        listAgents: () => deps.agent.listAgents?.(),
       },
       receivedAt,
       full.create_time_ms,
     );
     if (slashResult.handled) return;
+    effectiveTextBody = slashResult.rewrittenText ?? textBody;
   }
 
   // --- Store context token ---
@@ -172,12 +196,46 @@ export async function processOneMessage(
   // --- Build ChatRequest ---
   const request: ChatRequest = {
     conversationId: full.from_user_id ?? "",
-    text: bodyFromItemList(full.item_list),
+    text: effectiveTextBody || bodyFromItemList(full.item_list),
     media,
   };
 
   // --- Typing indicator (start + periodic refresh) ---
   const to = full.from_user_id ?? "";
+  let progressTimer: ReturnType<typeof setInterval> | undefined;
+  let progressChain = Promise.resolve();
+  let lastProgressNoticeAt = 0;
+  let latestProgressDetail = "";
+  let latestProgressAt = receivedAt;
+  let finished = false;
+
+  const enqueueProgressNotice = (detail?: string) => {
+    if (!contextToken || finished) return;
+    const now = Date.now();
+    if (now - receivedAt < PROGRESS_FIRST_DELAY_MS) return;
+    if (lastProgressNoticeAt && now - lastProgressNoticeAt < PROGRESS_MIN_INTERVAL_MS) return;
+
+    lastProgressNoticeAt = now;
+    const text = buildProgressNotice(now - receivedAt, detail);
+    progressChain = progressChain
+      .then(() =>
+        sendMessageWeixin({
+          to,
+          text,
+          opts: { baseUrl: deps.baseUrl, token: deps.token, contextToken },
+        }),
+      )
+      .catch((err) => {
+        logger.error(`send progress notice failed: ${String(err)}`);
+      });
+  };
+
+  request.onProgress = (update: ChatProgressUpdate) => {
+    latestProgressAt = Date.now();
+    latestProgressDetail = update.message;
+    enqueueProgressNotice(update.message);
+  };
+
   let typingTimer: ReturnType<typeof setInterval> | undefined;
   const startTyping = () => {
     if (!deps.typingTicket) return;
@@ -195,10 +253,18 @@ export async function processOneMessage(
     startTyping();
     typingTimer = setInterval(startTyping, 10_000);
   }
+  progressTimer = setInterval(() => {
+    if (finished) return;
+    const detail = latestProgressDetail || "正在处理你的请求";
+    if (Date.now() - latestProgressAt >= PROGRESS_TIMER_TICK_MS) {
+      enqueueProgressNotice(detail);
+    }
+  }, PROGRESS_TIMER_TICK_MS);
 
   // --- Call agent & send reply ---
   try {
     const response = await deps.agent.chat(request);
+    finished = true;
 
     if (response.media) {
       let filePath: string;
@@ -226,6 +292,7 @@ export async function processOneMessage(
       });
     }
   } catch (err) {
+    finished = true;
     logger.error(`processOneMessage: agent or send failed: ${err instanceof Error ? err.stack ?? err.message : JSON.stringify(err)}`);
     void sendWeixinErrorNotice({
       to,
@@ -236,6 +303,7 @@ export async function processOneMessage(
       errLog: deps.errLog,
     });
   } finally {
+    if (progressTimer) clearInterval(progressTimer);
     // --- Typing indicator (cancel) ---
     if (typingTimer) clearInterval(typingTimer);
     if (deps.typingTicket) {
@@ -249,5 +317,6 @@ export async function processOneMessage(
         },
       }).catch(() => {});
     }
+    await progressChain;
   }
 }

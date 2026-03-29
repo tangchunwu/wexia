@@ -15,6 +15,8 @@ import { sendMessageWeixin } from "./send.js";
 export interface SlashCommandResult {
   /** 是否是斜杠指令（true 表示已处理，不需要继续走 AI） */
   handled: boolean;
+  /** 如果指令需要继续走 AI，这里返回改写后的文本。 */
+  rewrittenText?: string;
 }
 
 export interface SlashCommandContext {
@@ -27,6 +29,12 @@ export interface SlashCommandContext {
   errLog: (msg: string) => void;
   /** Called when /clear is invoked to reset the agent session. */
   onClear?: () => void;
+  /** 切换当前会话默认 Agent。 */
+  onSelectAgent?: (agentKey: string) => void;
+  /** 获取当前会话默认 Agent。 */
+  getCurrentAgent?: () => string | undefined;
+  /** 获取当前可用 Agent 列表。 */
+  listAgents?: () => string[];
 }
 
 /** 发送回复消息 */
@@ -59,6 +67,59 @@ async function handleEcho(
     `└ 插件处理: ${Date.now() - receivedAt}ms`,
   ].join("\n");
   await sendReply(ctx, timing);
+}
+
+const AGENT_COMMANDS: Record<string, { key: string; label: string }> = {
+  "/codex": { key: "codex", label: "Codex" },
+  "/gemini": { key: "gemini", label: "Gemini" },
+  "/claude": { key: "claude", label: "Claude" },
+};
+
+function buildHelpText(ctx: SlashCommandContext): string {
+  const current = ctx.getCurrentAgent?.() ?? "unknown";
+  const available = ctx.listAgents?.() ?? [];
+  const availableText = available.length > 0 ? available.join(" / ") : "codex / gemini / claude";
+
+  return [
+    "可用命令：",
+    "/codex [问题]  切到 Codex；带内容时直接发送给 Codex",
+    "/gemini [问题] 切到 Gemini；带内容时直接发送给 Gemini",
+    "/claude [问题] 切到 Claude；带内容时直接发送给 Claude",
+    "/clear 或 /new 清空当前 Agent 会话",
+    "/info 查看当前 Agent",
+    "/toggle-debug 开关调试模式",
+    "/echo <内容> 直接回显",
+    "",
+    `当前 Agent: ${current}`,
+    `可用 Agent: ${availableText}`,
+  ].join("\n");
+}
+
+async function handleAgentSwitchCommand(
+  command: string,
+  args: string,
+  ctx: SlashCommandContext,
+): Promise<SlashCommandResult> {
+  const spec = AGENT_COMMANDS[command];
+  if (!spec) return { handled: false };
+
+  const supported = ctx.listAgents?.() ?? [];
+  if (supported.length > 0 && !supported.includes(spec.key)) {
+    await sendReply(ctx, `❌ 当前服务未启用 ${spec.label}`);
+    return { handled: true };
+  }
+
+  ctx.onSelectAgent?.(spec.key);
+  const prompt = args.trim();
+  if (!prompt) {
+    await sendReply(ctx, `✅ 当前会话已切换到 ${spec.label}`);
+    return { handled: true };
+  }
+
+  return {
+    handled: false,
+    rewrittenText: prompt,
+  };
 }
 
 /**
@@ -98,11 +159,33 @@ export async function handleSlashCommand(
         );
         return { handled: true };
       }
+      case "/new":
       case "/clear": {
         ctx.onClear?.();
         await sendReply(ctx, "✅ 会话已清除，重新开始对话");
         return { handled: true };
       }
+      case "/info": {
+        const current = ctx.getCurrentAgent?.() ?? "unknown";
+        const available = ctx.listAgents?.() ?? [];
+        await sendReply(
+          ctx,
+          [
+            `当前 Agent: ${current}`,
+            `可用 Agent: ${available.length > 0 ? available.join(" / ") : "unknown"}`,
+            `Debug 模式: ${isDebugMode(ctx.accountId) ? "开启" : "关闭"}`,
+          ].join("\n"),
+        );
+        return { handled: true };
+      }
+      case "/help": {
+        await sendReply(ctx, buildHelpText(ctx));
+        return { handled: true };
+      }
+      case "/codex":
+      case "/gemini":
+      case "/claude":
+        return await handleAgentSwitchCommand(command, args, ctx);
       default:
         return { handled: false };
     }
