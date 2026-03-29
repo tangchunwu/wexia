@@ -11,6 +11,19 @@ export interface Agent {
   chat(request: ChatRequest): Promise<ChatResponse>;
   /** Clear/reset the session for a given conversation. */
   clearSession?(conversationId: string): void;
+  /** Switch the default agent for a conversation. */
+  selectAgent?(conversationId: string, agentKey: string): void;
+  /** Get the current default agent for a conversation. */
+  getCurrentAgent?(conversationId: string): string | undefined;
+  /** List supported agent keys. */
+  listAgents?(): string[];
+}
+
+export interface ChatProgressUpdate {
+  /** Progress category. */
+  kind: "heartbeat" | "thinking" | "tool";
+  /** Human-readable progress message. */
+  message: string;
 }
 
 export interface ChatRequest {
@@ -18,6 +31,8 @@ export interface ChatRequest {
   conversationId: string;
   /** Text content of the message. */
   text: string;
+  /** Optional callback for intermediate progress signals while the agent is still working. */
+  onProgress?: (update: ChatProgressUpdate) => void | Promise<void>;
   /** Attached media file (image, audio, video, or generic file). */
   media?: {
     type: "image" | "audio" | "video" | "file";

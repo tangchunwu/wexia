@@ -1,5 +1,5 @@
-import type { Agent, ChatRequest, ChatResponse } from "weixin-agent-sdk";
-import type { SessionId } from "@agentclientprotocol/sdk";
+import type { Agent, ChatProgressUpdate, ChatRequest, ChatResponse } from "weixin-agent-sdk";
+import type { SessionId, SessionNotification } from "@agentclientprotocol/sdk";
 
 import type { AcpAgentOptions } from "./types.js";
 import { AcpConnection } from "./acp-connection.js";
@@ -8,6 +8,63 @@ import { ResponseCollector } from "./response-collector.js";
 
 function log(msg: string) {
   console.log(`[acp] ${msg}`);
+}
+
+const ACP_TURN_TIMEOUT_MS = 600_000;
+
+function describeToolUpdate(update: {
+  title?: string | null;
+  kind?: string | null;
+  toolCallId?: string;
+}): string {
+  return update.title ?? update.kind ?? update.toolCallId ?? "工具调用";
+}
+
+function toProgressUpdate(notification: SessionNotification): ChatProgressUpdate | null {
+  const update = notification.update;
+  switch (update.sessionUpdate) {
+    case "tool_call":
+      return {
+        kind: "tool",
+        message: `正在执行：${describeToolUpdate(update)}`,
+      };
+    case "tool_call_update":
+      if (update.status === "in_progress") {
+        return {
+          kind: "tool",
+          message: `继续执行：${describeToolUpdate(update)}`,
+        };
+      }
+      return null;
+    case "agent_thought_chunk":
+      return {
+        kind: "thinking",
+        message: "正在分析并处理你的请求",
+      };
+    case "agent_message_chunk":
+      return {
+        kind: "heartbeat",
+        message: "正在整理回复内容",
+      };
+    default:
+      return null;
+  }
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }
 
 /**
@@ -45,10 +102,30 @@ export class AcpAgent implements Agent {
 
     const collector = new ResponseCollector();
     this.connection.registerCollector(sessionId, collector);
+    if (request.onProgress) {
+      this.connection.registerProgressListener(sessionId, (notification) => {
+        const progress = toProgressUpdate(notification);
+        if (progress) {
+          void request.onProgress?.(progress);
+        }
+      });
+    }
     try {
-      await conn.prompt({ sessionId, prompt: blocks });
+      await withTimeout(
+        conn.prompt({ sessionId, prompt: blocks }),
+        ACP_TURN_TIMEOUT_MS,
+        `Agent 请求超时（>${Math.floor(ACP_TURN_TIMEOUT_MS / 1000)} 秒）`,
+      );
+    } catch (error) {
+      if (error instanceof Error && error.message.includes("请求超时")) {
+        log(`timeout: resetting agent process for session=${sessionId}`);
+        this.connection.dispose();
+        this.sessions.clear();
+      }
+      throw error;
     } finally {
       this.connection.unregisterCollector(sessionId);
+      this.connection.unregisterProgressListener(sessionId);
     }
 
     const response = await collector.toResponse();

@@ -13,15 +13,45 @@
  *   npx weixin-acp start -- node ./my-agent.js
  */
 
+import path from "node:path";
+
 import { isLoggedIn, login, logout, start } from "weixin-agent-sdk";
 
 import { AcpAgent } from "./src/acp-agent.js";
+import { MultiAgentRouter, type MultiAgentDefinition } from "./src/multi-agent.js";
 
 /** Built-in agent shortcuts */
 const BUILTIN_AGENTS: Record<string, { command: string }> = {
   "claude-code": { command: "claude-agent-acp" },
+  gemini: { command: "gemini --acp" },
   codex: { command: "codex-acp" },
 };
+
+const localBin = (name: string) => path.resolve(process.cwd(), "node_modules", ".bin", name);
+
+const ROUTED_AGENT_DEFINITIONS: MultiAgentDefinition[] = [
+  {
+    key: "codex",
+    label: "Codex",
+    options: {
+      command: localBin("codex-acp"),
+      cwd: process.cwd(),
+    },
+  },
+  {
+    key: "gemini",
+    label: "Gemini",
+    options: { command: "gemini", args: ["--acp", "--model", "gemini-2.5-pro"], cwd: process.cwd() },
+  },
+  {
+    key: "claude",
+    label: "Claude",
+    options: {
+      command: localBin("claude-agent-acp"),
+      cwd: process.cwd(),
+    },
+  },
+];
 
 const command = process.argv[2];
 
@@ -51,6 +81,27 @@ async function startAgent(acpCommand: string, acpArgs: string[] = []) {
   return start(agent, { abortSignal: ac.signal });
 }
 
+async function startRoutedAgents(defaultAgentKey: string) {
+  await ensureLoggedIn();
+
+  const agent = new MultiAgentRouter(ROUTED_AGENT_DEFINITIONS, defaultAgentKey);
+  const ac = new AbortController();
+  process.on("SIGINT", () => {
+    console.log("\n正在停止...");
+    agent.dispose();
+    ac.abort();
+  });
+  process.on("SIGTERM", () => {
+    agent.dispose();
+    ac.abort();
+  });
+
+  console.log(
+    `已启用多 Agent 模式，默认=${defaultAgentKey}，可在微信中使用 /codex /gemini /claude 切换`,
+  );
+  return start(agent, { abortSignal: ac.signal });
+}
+
 async function main() {
   if (command === "login") {
     await login();
@@ -76,8 +127,9 @@ async function main() {
   }
 
   if (command && command in BUILTIN_AGENTS) {
-    const { command: acpCommand } = BUILTIN_AGENTS[command];
-    await startAgent(acpCommand);
+    const routedDefault =
+      command === "claude-code" ? "claude" : command === "gemini" ? "gemini" : "codex";
+    await startRoutedAgents(routedDefault);
     return;
   }
 
@@ -86,8 +138,9 @@ async function main() {
 用法:
   npx weixin-acp login                          扫码登录微信
   npx weixin-acp logout                         退出登录
-  npx weixin-acp claude-code                     使用 Claude Code
-  npx weixin-acp codex                           使用 Codex
+  npx weixin-acp claude-code                     启动多 Agent 模式，默认使用 Claude
+  npx weixin-acp codex                           启动多 Agent 模式，默认使用 Codex
+  npx weixin-acp gemini                          启动多 Agent 模式，默认使用 Gemini
   npx weixin-acp start -- <command> [args...]    使用自定义 agent
 
 示例:
