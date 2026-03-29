@@ -17,6 +17,12 @@
 ### 直接安装
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/tangchunwu/wexia/main/install.sh | zsh
+```
+
+如果你想显式指定仓库和分支：
+
+```bash
 WEIXIN_ACP_REPO_URL=https://github.com/tangchunwu/wexia.git \
 WEIXIN_ACP_REPO_REF=main \
 zsh <(curl -fsSL https://raw.githubusercontent.com/tangchunwu/wexia/main/scripts/install-from-git.sh)
