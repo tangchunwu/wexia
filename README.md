@@ -4,6 +4,47 @@
 
 微信 AI Agent 桥接框架 —— 通过简单的 Agent 接口，将任意 AI 后端接入微信。
 
+## 一键安装（本仓库定制版）
+
+这份仓库包含了一个定制版微信桥接，额外提供：
+
+- `/codex` `/gemini` `/claude` 多 Agent 切换
+- 图片、语音、文件入站支持
+- 后台常驻、开机自启、崩溃自动拉起
+- 长任务最长等待 10 分钟
+- 长任务执行中会间歇发送“还在处理中”提示
+
+### 直接安装
+
+```bash
+WEIXIN_ACP_REPO_URL=https://github.com/tangchunwu/wexia.git \
+WEIXIN_ACP_REPO_REF=main \
+zsh <(curl -fsSL https://raw.githubusercontent.com/tangchunwu/wexia/main/scripts/install-from-git.sh)
+```
+
+### 首次登录微信
+
+```bash
+cd ~/.openclaw/openclaw-weixin-custom/weixin-agent-sdk
+pnpm --filter weixin-acp exec node dist/main.mjs login
+```
+
+### 常用微信命令
+
+- `/codex [问题]` 切到 Codex；带内容时直接发送
+- `/gemini [问题]` 切到 Gemini；带内容时直接发送
+- `/claude [问题]` 切到 Claude；带内容时直接发送
+- `/new` 或 `/clear` 清空当前会话
+- `/info` 查看当前 Agent
+- `/help` 查看帮助
+
+### 查看后台状态
+
+```bash
+launchctl print gui/$(id -u)/com.openclaw.weixin-acp | sed -n '1,80p'
+tail -f ~/Library/Logs/weixin-acp.stdout.log
+```
+
 ## 项目结构
 
 ```
@@ -41,6 +82,17 @@ npx weixin-acp start -- kimi acp
 `--` 后面的部分就是你的 ACP agent 启动命令，`weixin-acp` 会自动以子进程方式启动它，通过 JSON-RPC over stdio 进行通信。
 
 更多 ACP 兼容 agent 请参考 [ACP agent 列表](https://agentclientprotocol.com/get-started/agents)。
+
+## 本仓库定制功能
+
+相对上游版本，这个仓库当前额外包含：
+
+- 多 Agent 路由：同一微信会话中支持 `/codex`、`/gemini`、`/claude`
+- Gemini 默认固定为 `gemini-2.5-pro`
+- `codex-acp`、`claude-agent-acp` 自动走本地 `node_modules/.bin`
+- 长任务进度提示：执行时间较长时，微信侧会收到“还在处理中”的提示
+- 超时保护：单次最长等待 10 分钟，避免无限卡死
+- macOS `launchd` 安装脚本：一键安装、后台常驻、开机自启
 
 ## 自定义 Agent
 
